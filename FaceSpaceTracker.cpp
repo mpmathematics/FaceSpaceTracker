@@ -1,9 +1,9 @@
 /*
- * FaceSpaceTracker.cpp
- *
- *  Created on: Jul 31, 2014
- *      Author: internshipdude
- */
+* FaceSpaceTracker.cpp
+*
+*  Created on: Jul 31, 2014
+*      Author: Marcel Padilla
+*/
 
 
 #include <iostream>
@@ -13,8 +13,9 @@
 #include <string>
 
 #include <ctime> // for time measurement
-#include <math.h> // use M_PI from here and sin
+#include <math.h> // use constant_PI from here and sin
 
+double constant_PI=3.14159265359;
 
 // FaceSpaceTracker class, includes opencv
 #include "FaceSpaceTracker.h"
@@ -41,25 +42,25 @@ using namespace cv; // opencv
 //=================================================================================================
 //=================================================================================================
 /*
- * This is a facetracking class by the use of a webcam that is set directly above the screen.
- * Used to return the estimated Position of the eyes in 3D space
- *
- * The origin of its coordinate system is the center of the screen, unless you calibrate, then it is perpendicuar on the screen to where you calibrated it
- * +X = Right
- * +Y = Up
- * -Z = Depth
- * Everything is measured in millimeters
- *
- * The constructor reads the settings from the FaceSpaceTracker.cfg file
- * To update the Tracking Position, do Objectname.updateTrackData();"
- * and then get Objectname.getXhumanPosition() etc.
- *
- * eyeXrelation & eyeYrelation have default values .5,.4 to give the camera the center between your eyes,
- * but it might be benificial for the 3d effect to push the x value towards the dominant eye of the user,
- * eg. right dominant eye x=.7;
- *
- *
- * */
+* This is a facetracking class by the use of a webcam that is set directly above the screen.
+* Used to return the estimated Position of the eyes in 3D space
+*
+* The origin of its coordinate system is the center of the screen, unless you calibrate, then it is perpendicuar on the screen to where you calibrated it
+* +X = Right
+* +Y = Up
+* -Z = Depth
+* Everything is measured in millimeters
+*
+* The constructor reads the settings from the FaceSpaceTracker.cfg file
+* To update the Tracking Position, do Objectname.updateTrackData();"
+* and then get Objectname.getXhumanPosition() etc.
+*
+* eyeXrelation & eyeYrelation have default values .5,.4 to give the camera the center between your eyes,
+* but it might be benificial for the 3d effect to push the x value towards the dominant eye of the user,
+* eg. right dominant eye x=.7;
+*
+*
+* */
 //=================================================================================================
 //=================================================================================================
 //=================================================================================================
@@ -72,7 +73,7 @@ using namespace cv; // opencv
 //=================================================================================================
 //=================================================================================================
 //=================================================================================================
-
+// for a more detailed explaination what these function do, check the FaceSpaceTracker website
 
 
 FaceSpaceTracker::FaceSpaceTracker(){
@@ -81,32 +82,45 @@ FaceSpaceTracker::FaceSpaceTracker(){
 	cameraInit();
 }
 
-FaceSpaceTracker::FaceSpaceTracker(const char* configLocation){
+FaceSpaceTracker::FaceSpaceTracker(std::string configLocation){
 	// constructor with specified config file
 	configFile = configLocation;
 	cameraInit();
 }
 
 void FaceSpaceTracker::cameraInit(){
-	// initializes all camera Settings
+	// initializes all camera Settings and loads the camera
+
+	//check if camera device is open, if yes, close it
+	if(captureDevice.isOpened()) cameraOff();
+
 	cout << " FaceSpaceTracker : read config file = "<< configFile << endl;
 	readConfigFile();
 
-	// define what is not set by the the configfile
-	faceFound=false;
-	profileFound=false;
-	calibrate=false;
+	// init what is not set by the the configfile
+	trackStatus='N'; // N = nothing
+	calibrateX=false;
+	calibrateY=false;
+	calibrateZ=false;
 	smoothonly=false;
 	showCamFrame = false;
-	calibrationX=0;
-	calibrationY=0;
+	calibrationValueX=0;
+	calibrationValueY=0;
+	calibrationValueZ=0;
+	calibrationPixelX=0;
+	calibrationPixelY=0;
 	numberOfFrames=0;
-	lastTimeOfUpdate=0; // unfinished, to update trackdata after specified time intervals
+	//lastTimeOfUpdate=0; // unfinished, to update trackdata after specified time intervals
 
-	cout << " FaceSpaceTracker : load cascade = " << faceTrackingFile << endl;
 
-	face_cascade.load(faceTrackingFile);
-	//	profile_cascade.load(profileTrackingFile);
+	// load the different cascades
+	cout << " FaceSpaceTracker : load face cascade = " << faceTrackingFileName << endl;
+	face_cascade.load(faceTrackingFileName);
+
+	if( allowProfileTracking) {
+		cout << " FaceSpaceTracker : load profile cascade = " << profileTrackingFileName << endl;
+		profile_cascade.load(profileTrackingFileName);
+	}
 
 	cout << " FaceSpaceTracker : open capture device" << endl;
 	int cameraNumber=0;
@@ -117,19 +131,15 @@ void FaceSpaceTracker::cameraInit(){
 			exit(-1);
 		}
 	}
+
 	// make sure the frames are not empty
 	captureDevice >> captureFrame;
 	grayscaleFrame = captureFrame;
 
-	// read resolutions
-	webcamYresolution = captureDevice.get(CV_CAP_PROP_FRAME_HEIGHT);
-	webcamXresolution = captureDevice.get(CV_CAP_PROP_FRAME_WIDTH);
-
-	//	 run the facetracking a few times to calibrate it. important for fixed depth.
-	for(int i=0;i < 2*skipAmount*max(previousPixelDataCols,previousVectorDataCols) ; i++){
-		trackUpdate();
-	}
-	calibrateCenter();
+	// read resolutions. the opencv matrix holding the video capture automatically carries the correct sizes.
+	cameraRealXresolution = captureFrame.cols;
+	cameraRealYresolution = captureFrame.rows;
+	
 }
 
 void FaceSpaceTracker::cameraOff(){
@@ -140,18 +150,14 @@ void FaceSpaceTracker::cameraOff(){
 
 void FaceSpaceTracker::updateTrackData(){
 	// intended to call once per frame, updates the Position data
-	if(!faceFound || numberOfFrames % (skipAmount+1) == 0){
-		//	if(!faceFound || (clock()/CLOCKS_PER_SEC*1000 - lastTimeOfUpdate) > (skipAmount+1)){
+	if(  numberOfFrames % (skipAmount+1) == 0){ // trackStatus =='N' ||
 		// only update after every "skipAmount" of frames and if the face was previously found
 		trackUpdate();
-		//numberOfFrames=1;
-		//		lastTimeOfUpdate=clock()/CLOCKS_PER_SEC*1000;
-
 	} else {
-		//when the actuall facetracking is taking a break, the previous data is still smoothend
+		//when the actuall facetracking is taking a brake, the previous data is still smoothend
 		updateTrackDataSmoothOnly();
 	}
-	// remember that a frame has been made
+	// remember that this call happened
 	numberOfFrames++;
 	//	numberOfFrames=clock() - lastTime;
 }
@@ -165,53 +171,54 @@ void FaceSpaceTracker::updateTrackDataSmoothOnly(){
 
 void FaceSpaceTracker::calibrateCenter(){
 	// set true so in the next update the calibration will happen
-	calibrate = true;
+	calibrateX = true;
+	calibrateY = true;
+	calibrateZ = true;
 }
 
 void FaceSpaceTracker::resetCalibration(){
 	// remove x,y z calibration
-	calibrationX=0;
-	calibrationY=0;
-	fixedDepth=false;
+	calibrationValueX=0;
+	calibrationValueY=0;
+	calibrationValueZ=0;
 }
 
-void FaceSpaceTracker::loadConfigFile(const char* newfile){
+void FaceSpaceTracker::loadConfigFile(std::string newfile){
 	// switch the camera Settings
 	configFile = newfile;
-
-	cameraOff(); // free the old camera
-
-	cameraInit(); // initialize with new camera
+	// initialize with new camera
+	cameraInit(); 
 }
 
 // get the calibrated position
-double FaceSpaceTracker::getXHumanPosition(){
+double FaceSpaceTracker::getXposition(){
 	return humanPosition[0];
 }
 
-double FaceSpaceTracker::getYHumanPosition(){
+double FaceSpaceTracker::getYposition(){
 	return humanPosition[1];
 }
 
-double FaceSpaceTracker::getZHumanPosition(){
+double FaceSpaceTracker::getZposition(){
 	return humanPosition[2];
 }
 
 // get the Position as if without calibration of xyz
-double FaceSpaceTracker::getAbsoluteXHumanPosition(){
+double FaceSpaceTracker::getAbsoluteXposition(){
 	return previousVectorData[0][0];
 }
 
-double FaceSpaceTracker::getAbsoluteYHumanPosition(){
+double FaceSpaceTracker::getAbsoluteYposition(){
 	return previousVectorData[1][0];
 }
 
-double FaceSpaceTracker::getAbsoluteZHumanPosition(){
+double FaceSpaceTracker::getAbsoluteZposition(){
 	return previousVectorData[2][0];
 }
 
-bool FaceSpaceTracker::getFaceFound(){
-	return faceFound;
+char FaceSpaceTracker::getTrackStatus(){
+	// see if a face was found, frontal, L or R in the last tracking attempt
+	return trackStatus;
 }
 
 cv::Mat FaceSpaceTracker::getCaputureFrame(){
@@ -220,10 +227,10 @@ cv::Mat FaceSpaceTracker::getCaputureFrame(){
 }
 
 cv::Mat FaceSpaceTracker::getCroppedCaptureFrame(){
-	// return what the camera Trackes
+	// return what the camera tracks
 
 	// update imageMargin
-	int imageMargin = lastTrackPixelData[2]*imageMarginRelation;
+	int imageMargin = lastTrackPixelData[2]*imageMarginRelation; // floor that value
 	int ancorX = lastTrackPixelData[0] - imageMargin;
 	int ancorY = lastTrackPixelData[1] - imageMargin;
 	int ancorHeight = lastTrackPixelData[2] + 2*imageMargin;
@@ -232,12 +239,14 @@ cv::Mat FaceSpaceTracker::getCroppedCaptureFrame(){
 	// make sure we do not cross the boarders
 	if( ancorX < 0 ) ancorX=0;
 	if( ancorY < 0 ) ancorY=0;
-	if( ancorX + ancorWidth >= webcamXresolution ) ancorWidth = webcamXresolution - ancorX;
-	if( ancorY + ancorHeight >= webcamYresolution ) ancorHeight = webcamYresolution - ancorY;
+	if( ancorX + ancorWidth >= captureFrame.cols ) ancorWidth = captureFrame.cols - ancorX;
+	if( ancorY + ancorHeight >= captureFrame.rows ) ancorHeight = captureFrame.rows - ancorY;
 
+	// return the cut out of the image
 	return captureFrame( Rect(ancorX , ancorY , ancorWidth , ancorHeight ) );
 }
 
+// get some of the parameters
 double FaceSpaceTracker::getScreenHeight(){
 	return realLifeScreenHeight;
 }
@@ -250,13 +259,98 @@ double FaceSpaceTracker::getFaceHeight(){
 	return realLifeFaceHeight;
 }
 
-bool FaceSpaceTracker::getFixedDepth(){
-	return fixedDepth;
+double FaceSpaceTracker::getDetectionScaleIncreaseRate(){
+	return detectionScaleIncreaseRate;
 }
 
-bool FaceSpaceTracker::getShowCamFram(){
+double FaceSpaceTracker::getCameraVerticalFOV(){
+	return cameraVerticalFOV;
+}
+
+bool FaceSpaceTracker::getAllowFrameResizing(){
+	return allowFrameResizing;
+}
+
+int FaceSpaceTracker::getCameraRealXresolution(){
+	return cameraRealXresolution;
+}
+
+int FaceSpaceTracker::getCameraRealYresolution(){
+	return cameraRealYresolution;
+}
+
+int FaceSpaceTracker::getCameraTargetXresolution(){
+	return cameraTargetXresolution;
+}
+
+int FaceSpaceTracker::getCameraTargetYresolution(){
+	return cameraTargetYresolution;
+}
+
+double FaceSpaceTracker::getImageMarginRelation(){
+	return imageMarginRelation;
+}
+
+int FaceSpaceTracker::getPreviousPixelDataCols(){
+	return previousPixelDataCols;
+}
+
+int FaceSpaceTracker::getPreviousVectorDataCols(){
+	return previousVectorDataCols;
+}
+
+double FaceSpaceTracker::getErrorToleranceXY(){
+	return errorToleranceXY;
+}
+
+double FaceSpaceTracker::getErrorToleranceDepth(){
+	return errorToleranceDepth;
+}
+
+double FaceSpaceTracker::getEyeXrealtion(){
+	return eyeXrelation;
+}
+
+double FaceSpaceTracker::getEyeYrealtion(){
+	return eyeYrelation;
+}
+
+int FaceSpaceTracker::getSkipAmount(){
+	return skipAmount;
+}
+
+std::string FaceSpaceTracker::getFaceTrackingFileName(){
+	return faceTrackingFileName;
+}
+
+bool FaceSpaceTracker::getAllowProfileTracking(){
+	return allowProfileTracking;
+}
+
+std::string FaceSpaceTracker::getProfileTrackingFileName(){
+	return profileTrackingFileName;
+}
+
+bool FaceSpaceTracker::getShowCamFrame(){
 	return showCamFrame;
 }
+
+bool FaceSpaceTracker::nextFrameWillBeTracked(){
+	// returns true if the next updateTrackData() call will take longer since it actually tracks the face instead of smoothening
+	// this can be important since that tracking will take a few more miliseconds
+	return ( trackStatus!='N' || numberOfFrames % (skipAmount+1) == 0); 
+}
+bool FaceSpaceTracker::lastFrameWasTracked(){
+	// returns true if the last updateTrackData() call took longer since it actually tracked the face instead of smoothening
+	// this can be important since that tracking will take a few more miliseconds
+	return ( trackStatus!='N' || (numberOfFrames - 1) % (skipAmount+1) == 0); 
+}
+
+
+
+//=================================================================
+// =========== SET METHODS ==================================
+//=================================================================
 
 void FaceSpaceTracker::setScreenHeigth(double heigth){
 	realLifeScreenHeight = heigth;
@@ -270,16 +364,30 @@ void FaceSpaceTracker::setFaceHeigth(double faceheigth){
 	realLifeFaceHeight = faceheigth;
 }
 
-void FaceSpaceTracker::setCamXResolution(int res){
-	webcamXresolution = res;
-}
-
-void FaceSpaceTracker::setCamYResolution(int res){
-	webcamYresolution = res;
-}
-
 void FaceSpaceTracker::setCamVerticalFOV(double fov){
-	webcamVerticalFOV = fov;
+	cameraVerticalFOV = fov;
+}
+
+void FaceSpaceTracker::setDetectionScaleIncreaseRate(double rate){
+	detectionScaleIncreaseRate=rate;
+}
+
+void FaceSpaceTracker::setAllowFrameRezising(bool allow){
+	allowFrameResizing=allow;
+}
+
+void FaceSpaceTracker::setCameraTargetXresolution(int pixels){
+	//reset trackStatus to avoid targeting an empty area
+	trackStatus ='N';
+	resetSmoothers();
+	cameraTargetXresolution = pixels;
+}
+
+void FaceSpaceTracker::setCameraTargetYresolution(int pixels){
+	//reset trackStatus to avoid targeting an empty area
+	trackStatus ='N';
+	resetSmoothers();
+	cameraTargetYresolution = pixels;
 }
 
 void FaceSpaceTracker::setImageTrackMarginRelation(double margin){
@@ -296,62 +404,95 @@ void FaceSpaceTracker::setTrackPixelDataSmoothingSteps(int cols){
 	setUpSmoothing();
 }
 
-void FaceSpaceTracker::setErrorToleranceXY(double err){
-	errorToleranceXY = err;
+void FaceSpaceTracker::setErrorToleranceXY(double pixels){
+	errorToleranceXY = pixels;
 }
 
-void FaceSpaceTracker::setErrorToleranceDepth(double err){
-	errorToleranceDepth = err;
+void FaceSpaceTracker::setErrorToleranceDepth(double pixels){
+	errorToleranceDepth = pixels;
 }
 
-void FaceSpaceTracker::setSkipAmount(int nr){
-	skipAmount = nr;
+void FaceSpaceTracker::setEyeXrealtion(double rel){
+	eyeXrelation=rel;
 }
 
-void FaceSpaceTracker::setFixedDepth(bool set){
-	fixedDepth=set;
+void FaceSpaceTracker::setEyeYrealtion(double rel){
+	eyeYrelation=rel;
+}
+
+void FaceSpaceTracker::setSkipAmount(int numberOfEmptyLoops){
+	skipAmount = numberOfEmptyLoops;
+}
+
+void FaceSpaceTracker::setXcalibration(double value){
+	calibrationValueX = value;
+}
+
+void FaceSpaceTracker::setYcalibration(double value){
+	calibrationValueY = value;
+}
+
+void FaceSpaceTracker::setZcalibration(double value){
+	calibrationValueZ = value;
 }
 
 void FaceSpaceTracker::setShowCamFrame(bool show ){
 	showCamFrame = show;
 }
 
-void FaceSpaceTracker::setCurrentConfigFile(const char* name){
+void FaceSpaceTracker::setCurrentConfigFile(std::string name){
 	configFile = name;
 }
 
-void FaceSpaceTracker::findFaceAgain(){
-	faceFound = false;
+void FaceSpaceTracker::setTrackStatus(char status){
+	trackStatus = status;
+}
+
+void FaceSpaceTracker::setFaceTrackingFileName(std::string path){
+	faceTrackingFileName = path;
+}
+
+void FaceSpaceTracker::setAllowProfileTracking(bool allow){
+	allowProfileTracking = allow;
+}
+
+void FaceSpaceTracker::setProfileTrackingFileName(std::string path){
+	profileTrackingFileName = path;
 }
 
 /* LINE BY LINE STRUCTURE OF CFG:
-	realLifeScreenHeight in mm
-	realLifeScreenWidth // maybe not used here, but useful on client side
-	realLifeFaceHeight
-	webcamVerFOV degrees
-	previousDataCols int
-	previousPixelDataCols
-	errorToleranceXY double
-	errorToleranceDepth double
-	eyeXrelation double
-	eyeYrelation double
-	skipAmount int
-	faceTrackingFile the char* needed to load the .xml
+realLifeScreenHeight in mm
+realLifeScreenWidth 
+realLifeFaceHeight
+webcamVerFOV degrees
+previousDataCols int
+previousPixelDataCols
+errorToleranceXY double
+errorToleranceDepth double
+eyeXrelation double
+eyeYrelation double
+skipAmount int
+faceTrackingFile the char* or string. Needed to load the .xml
 
- */
+*/
 
 void FaceSpaceTracker::readConfigFile(){
-	// all parameters/Global variables are stored in a separate config file to be manipulated by the application
+	// all the following parameters/Global variables are stored in a separate config file to be manipulated by the application
+	// this loads the parameters set in the current configfile to the current tracker
 
 	// open file for input
 	ifstream inputFile;
-	inputFile.open(configFile);
+	inputFile.open(configFile); 
 
 	string line;
 	inputFile >> line >>  line >>  realLifeScreenHeight;
 	inputFile >> line >>  line >>  realLifeScreenWidth;
 	inputFile >> line >>  line >>  realLifeFaceHeight;
-	inputFile >> line >>  line >>  webcamVerticalFOV;
+	inputFile >> line >>  line >>  cameraVerticalFOV;
+	inputFile >> line >>  line >>  detectionScaleIncreaseRate;
+	inputFile >> line >>  line >>  allowFrameResizing;
+	inputFile >> line >>  line >>  cameraTargetXresolution;
+	inputFile >> line >>  line >>  cameraTargetYresolution;
 	inputFile >> line >>  line >>  imageMarginRelation;
 	inputFile >> line >>  line >>  previousVectorDataCols;
 	inputFile >> line >>  line >>  previousPixelDataCols;
@@ -360,20 +501,25 @@ void FaceSpaceTracker::readConfigFile(){
 	inputFile >> line >>  line >>  eyeXrelation;
 	inputFile >> line >>  line >>  eyeYrelation;
 	inputFile >> line >>  line >>  skipAmount;
-	inputFile >> line >>  line >>  fixedDepth;
 
 	inputFile >> line >> line >> line;
-	faceTrackingFile = line.c_str();
 	faceTrackingFileName = line;
 
-	setUpSmoothing(); // necessary for dynamic Matrices
-	resetSmoothers();
+	inputFile >> line >> line >> allowProfileTracking;
+
+	inputFile >> line >> line >> line;
+	profileTrackingFileName = line;
 
 	//close file
 	inputFile.close();
+
+	// necessary for dynamic Matrices
+	setUpSmoothing(); 
+	resetSmoothers();
+
 }
 
-void FaceSpaceTracker::saveConfigFile(){ // TODO currently not working because of misterious eigen messages sneaking in.
+void FaceSpaceTracker::saveConfigFile(){
 	// open file for output
 	ofstream outputfile;
 	outputfile.open(configFile);
@@ -389,8 +535,20 @@ void FaceSpaceTracker::saveConfigFile(){ // TODO currently not working because o
 	outputfile << "realLifeFaceHeight Millimeters= ";
 	outputfile << realLifeFaceHeight<< endl;
 
-	outputfile << "webcamVerticalFOV Degrees= ";
-	outputfile << webcamVerticalFOV << endl;
+	outputfile << "cameraVerticalFOV Degrees= ";
+	outputfile << cameraVerticalFOV << endl;
+
+	outputfile << "detectionScaleIncreaseRate double= ";
+	outputfile << detectionScaleIncreaseRate << endl;
+	
+	outputfile << "allowFrameResizing bool= ";
+	outputfile << allowFrameResizing << endl;
+
+	outputfile << "cameraTargetXresolution int= ";
+	outputfile << cameraTargetXresolution << endl;
+
+	outputfile << "cameraTargetYresolution int= ";
+	outputfile << cameraTargetYresolution << endl;
 
 	outputfile << "imageMarginRelation double= ";
 	outputfile << imageMarginRelation << endl;
@@ -415,21 +573,61 @@ void FaceSpaceTracker::saveConfigFile(){ // TODO currently not working because o
 
 	outputfile << "skipAmount int= ";
 	outputfile << skipAmount << endl;
-
-	outputfile << "fixedDepth bool= ";
-	outputfile << fixedDepth << endl;
-
+	
 	outputfile << "faceTrackingFile Location= ";
 	outputfile << faceTrackingFileName << endl;
 
+	outputfile << "allowProfileTracking bool= ";
+	outputfile << allowProfileTracking << endl;
 
+	outputfile << "profileTrackingFile Location= ";
+	outputfile << profileTrackingFileName << endl;
 
 	//close it
 	outputfile.close();
 }
 
 void FaceSpaceTracker::reportStatus(){
-	cout << " It should be working, hopefully " << endl;
+	cout << " ===== STATUS REPORT OF FaceSpaceTracker ======" << endl;
+
+	cout << "x position is = " << getXposition() << endl;
+	cout << "y position is = " << getYposition() << endl;
+	cout << "z position is = " << getZposition() << endl;
+	cout << "absolute x position is = " << getAbsoluteXposition() << endl;
+	cout << "absolute y position is = " << getAbsoluteYposition() << endl;
+	cout << "absolute z position is = " << getAbsoluteZposition() << endl;
+	cout << "current config file is = " << configFile << endl;
+	cout << "current face tracking xml is = " << faceTrackingFileName << endl;
+	cout << "Camera X resolution = "  << cameraRealXresolution << endl;
+	cout << "Camera Y resolution = "  << cameraRealYresolution << endl;
+	cout << "Camera Target X resolution = "  << cameraTargetXresolution << endl;
+	cout << "Camera Target Y resolution = "  << cameraTargetYresolution << endl;
+	cout << "Camera vertical field of view is = "  << cameraVerticalFOV << endl;
+	cout << "Face tracking file name is = " << faceTrackingFileName << endl;
+	cout << "Profile tracking file name is = " << profileTrackingFileName << endl;
+	cout << "Screen height is = " << realLifeScreenHeight << endl;
+	cout << "Screen width is = " << realLifeScreenWidth << endl;
+	cout << "Face height is = " << realLifeFaceHeight << endl;
+	cout << "calibrationValueX is = " << calibrationValueX << endl;
+	cout << "calibrationValueY is = " << calibrationValueY << endl;
+	cout << "calibrationValueZ is = " << calibrationValueZ << endl;
+	cout << "calibrateX bool is = " << calibrateX << endl;
+	cout << "calibrateY bool is = " << calibrateY << endl;
+	cout << "calibrateZ bool is = " << calibrateZ << endl;
+	cout << "imageMarginRelation is = " << imageMarginRelation << endl;
+	cout << "previousVectorDataCols is = " << previousVectorDataCols << endl;
+	cout << "previousPixelDataCols is = " << previousPixelDataCols << endl;
+	cout << "errorToleranceXY is = " << errorToleranceXY << endl;
+	cout << "errorToleranceDepth is = " << errorToleranceDepth << endl;
+	cout << "eyeXrelation is = " << eyeXrelation << endl;
+	cout << "eyeYrelation is = " << eyeYrelation << endl;
+	cout << "skipAmount is = " << skipAmount << endl;
+	cout << "showCamFrame bool is = " << showCamFrame << endl;
+	cout << "trackStatus char is = " << trackStatus << endl;
+	cout << "current numberOfFrames since start is = " << numberOfFrames << endl;
+	//cout << " is = " <<  << endl;
+
+	cout << " ======== END OF STATUS REPORT =========" << endl;
 }
 
 
@@ -472,10 +670,35 @@ void FaceSpaceTracker::resetSmoothers(){
 	lastTrackPixelData[0] = 0;
 	lastTrackPixelData[1] = 0;
 	lastTrackPixelData[2] = 1;
-	faceFound=false; // because we reseted the last pixel data
+	trackStatus = 'N'; //faceFound=false; // because we reseted the last pixel data
 }
 
+void FaceSpaceTracker::leftProfileTransformation(){
+	// this function only serves to mirror the capture frame for left yawn head rotations
+	cv::Mat flipper;
+	cv::flip(captureFrame, flipper, 1);
+	captureFrame = flipper;
 
+	// also transform the ancors for the head tracking, so the last track pixel data. [2] is face height
+	lastTrackPixelData[0] = captureFrame.rows - lastTrackPixelData[0] - lastTrackPixelData[2];
+}
+
+void FaceSpaceTracker::leftProfileInverseTransformation(){
+	// this function cancels the mirroring made by leftProfileTransformation(). it also corrects the faces coordinates
+	cv::Mat flipper;
+	cv::flip(captureFrame, flipper, 1);
+	captureFrame = flipper;
+	// fix coordinates only if anything was found 
+	if(faces.size() > 0) {
+		// dont forget to shift by the face height since the offset is wrongly mirrored from top left to top right corner.
+		faces[0].x = captureFrame.rows - faces[0].x - faces[0].height;
+	}
+
+	// also transform the ancors for the head tracking, so the last track pixel data, [2] is face height
+	lastTrackPixelData[0] = captureFrame.rows - lastTrackPixelData[0] - lastTrackPixelData[2];
+
+
+}
 
 void FaceSpaceTracker::trackPixelDataSmoother(int faceX, int faceY, int faceHeight){
 
@@ -549,48 +772,60 @@ void FaceSpaceTracker::trackFilter(double faceX, double faceY, double faceHeight
 	double imageScaleFactor = realLifeFaceHeight/faceHeight;
 
 	// estimate the center between the eyes in pixels, the center is the origin;
-	double eyeX = faceX + faceWidth*eyeXrelation - (double)webcamXresolution/2; // eyeX=.5 for center of eye, .7 for right eye
-	double eyeY = faceY + faceHeight*eyeYrelation - (double)webcamYresolution/2;
+	double eyeX = faceX + faceWidth*eyeXrelation - captureFrame.cols/2.0; // eyeX=.5 for center of eye, .7 for right eye
+	double eyeY = faceY + faceHeight*eyeYrelation - captureFrame.rows/2.0;
 
 	// estimate the distance from camera to center of camera plane (only using y hight, we guess the camera does not distort
 	// Camera plane := your face plane normal to the webcam's direction
-	double distanceToCamPlane = (webcamYresolution*imageScaleFactor/2)/(tan(webcamVerticalFOV*(M_PI/180)/2)); //
+	double distanceToCamPlane = (captureFrame.rows*imageScaleFactor/2)/(tan(cameraVerticalFOV*(constant_PI/180)/2)); //
 
 
-	// now estimate the position of your eyes (to the webcam)
+	// now estimate the position of your eyes (to the camera)
 	//// -Z is depth, +X is right, +Y is up
-	double newData[] = { // WARNING: we are in the webcame Frame coords
-			-eyeX*imageScaleFactor, // minus X because webcam image is mirrored @ y-axis
-			-eyeY*imageScaleFactor, // I have to flip y to have +y up. maybe because the eye coords origin is top left of webcam frame
-			distanceToCamPlane //old: negative sign because i needed to flip it, maybe because of webcamVerFOV
+	double newData[] = { // WARNING: we are in the camera Frame coords
+		-eyeX*imageScaleFactor, // minus X because camera image is mirrored @ y-axis
+		-eyeY*imageScaleFactor, // I have to flip y to have +y up. maybe because the eye coords origin is top left of webcam frame
+		distanceToCamPlane //old: negative sign because i needed to flip it, maybe because of webcamVerFOV
 	};
 
-	// NEW TRY, since camera parralel to screen, just shift the result down, cam is 1cm over screen
-	//data[1] = data[1] + (realLifeScreenHeight/2+10);
-
-
-	// smooth out data by extrapolation and update cameraOffset
-	//	for(int i=0;i<3;i++) data[i] = trackVectorSmoother(data)[i];
+	// smooth out data by extrapolation and update cameraOffset0
 	trackVectorSmoother(newData);
-
 	for(int i=0;i<3;i++) humanPosition[i] = previousVectorData[i][0];
 
-	if(calibrate){ // calibrate the data for the x,y coords, maybe later also the z s.t. the initial FOV is as demanded.
-		calibrate = false;
-		calibrationX = humanPosition[0];
-		calibrationY = humanPosition[1];
-		calibrationZ = humanPosition[2];
+	if(calibrateX) {
+		calibrateX = false;
+		calibrationValueX = humanPosition[0];
+		calibrationPixelX = lastTrackPixelData[0]; // important to have centering behaviour when loosing the face
 	}
-	// apply calibration
-	humanPosition[0] -= calibrationX;
-	humanPosition[1] -= calibrationY;
+	if(calibrateY) {
+		calibrateY = false;
+		calibrationValueY = humanPosition[1];
+		calibrationPixelY = lastTrackPixelData[1];
+	}
+	if(calibrateZ) {
+		calibrateZ = false;
+		calibrationValueZ = humanPosition[2];
+	}
 
-	// fix the depth if necessary
-	if(fixedDepth) humanPosition[2]=calibrationZ;
+	// apply calibration
+	humanPosition[0] -= calibrationValueX;
+	humanPosition[1] -= calibrationValueY;
+	humanPosition[2] -= calibrationValueZ;
+	
 
 }
 
-void FaceSpaceTracker::croppedFaceTrack(){
+void FaceSpaceTracker::croppedFaceTrack( char side){
+	// here we will find the face on the cropped area of the camera image
+	// the char side specifies what to track. eg F = front, R = right profile
+
+	//determine what classifier to use
+	cv::CascadeClassifier cascadeName;
+	if( side == 'F' ) cascadeName = face_cascade;
+	else if( allowProfileTracking ) cascadeName = profile_cascade;
+
+	// make the transform if necessary
+	if( allowProfileTracking && side == 'L' ) leftProfileTransformation();
 
 	// update imageMargin
 	int imageMargin = lastTrackPixelData[2]*imageMarginRelation;
@@ -602,105 +837,155 @@ void FaceSpaceTracker::croppedFaceTrack(){
 	// make sure we do not cross the boarders
 	if( ancorX < 0 ) ancorX=0;
 	if( ancorY < 0 ) ancorY=0;
-	if( ancorX + ancorWidth >= webcamXresolution ) ancorWidth = webcamXresolution - ancorX;
-	if( ancorY + ancorHeight >= webcamYresolution ) ancorHeight = webcamYresolution - ancorY;
+	if( ancorX + ancorWidth >= captureFrame.cols ) ancorWidth = captureFrame.cols - ancorX;
+	if( ancorY + ancorHeight >= captureFrame.rows ) ancorHeight = captureFrame.rows - ancorY;
 
 	//convert captured image to gray scale and equalize
 	cvtColor(captureFrame( Rect(ancorX , ancorY , ancorWidth , ancorHeight ) ), grayscaleFrame, CV_BGR2GRAY);
 	equalizeHist(grayscaleFrame, grayscaleFrame);
 
-	if(showCamFrame){ // show what i am tracking
-		imshow("CROP", grayscaleFrame);
-		waitKey(1);
-	}
-
 	// estimate the size of the face
 	double min_face_size = lastTrackPixelData[2]*0.8;
 	double max_face_size = lastTrackPixelData[2]*1.2;
 
-	//		clock_t begindetect = clock();
-	//		if(!profileFound){ // distinguish between tracking the front or the side of the face
-	// mistery note: seting 1.1 to 1.5 make it much faster, but looses faceHeight accuracy. use this if only the x,y data is needed
-	face_cascade.detectMultiScale(grayscaleFrame, faces, 1.1, 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
-
-	//			if(faces.size()==0){
-	//				profile_cascade.detectMultiScale(grayscaleFrame, faces, 1.1, 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
-	//				if(faces.size()==1) profileFound=true;
-	//			}
-	//		} else {
-	//			cout << "profile found" << endl;
-	//			profile_cascade.detectMultiScale(grayscaleFrame, faces, 1.1, 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
-	//
-	//			if(faces.size()==0){
-	//				profileFound=false;
-	//				face_cascade.detectMultiScale(grayscaleFrame, faces, 1.1, 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
-	//			}
-	//		}
+	detectionScaleIncreaseRate = 1.1; // TODO this value determines how much greater the next possible face might be when testing for faces. 1 < values < 1.1 increase depth precision at the cost of performance
+	//if(fixedDepth) detectionScaleIncreaseRate = detectionScaleIncreaseRate*1.3; // setting scaleIncreaseRate to 1.5 makes it much faster, but looses faceHeight accuracy. use this if only the x,y data is needed
+	cascadeName.detectMultiScale(grayscaleFrame, faces, detectionScaleIncreaseRate , 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
 
 	if(faces.size()==1) { // now recalibrate the data back to the big image frame
 		faces[0].x += ancorX;
 		faces[0].y += ancorY;
-	} else { // no face has been found, track all again
-		faceFound=false;
+	}
+
+	// undo the tranformation if necesary
+	if( allowProfileTracking && side == 'L' ) leftProfileInverseTransformation();
+
+}
+
+void FaceSpaceTracker::profileTrackCycle(char side){
+	// in this method, depending on the value of side track that side first and then the other
+
+
+	// right side case
+	if(side == 'R' ) {
+		croppedFaceTrack('R');
+		// check the result
+		if(faces.size() > 0) localTrackStatus='R';
+		else {
+			// track left
+			croppedFaceTrack('L');
+			// check the result
+			if(faces.size() > 0) localTrackStatus='L';
+			else {
+				// mark failure if even that failed
+				localTrackStatus ='N'; 
+			}
+		}
+	} else if( side == 'L') {
+		// track left
+		croppedFaceTrack('L');
+		// check the result
+		if(faces.size() > 0) localTrackStatus='L';
+		else {
+			// right
+			croppedFaceTrack('R');
+			// check the result
+			if(faces.size() > 0) localTrackStatus='R';
+			else {
+				// mark failure if even that failed
+				localTrackStatus ='N'; 
+			}
+		}
 	}
 }
 
-void FaceSpaceTracker::fullFaceTrack(){
+void FaceSpaceTracker::updateCameraFrame(){
+	//capture a new image frame, this is the image in the showwebcam, the grayscale is used for face detection
+	captureDevice >> captureFrame;
 
-	//convert captured image to gray scale and equalize
+	// if allowed, resize window size
+	if( allowFrameResizing ) {
+		// resize the captureFrame to a different (smaller) size
+		Size size(cameraTargetXresolution, cameraTargetYresolution);
+		resize( captureFrame, captureFrame , size); //resize image
+	}
+
+}
+
+void FaceSpaceTracker::fullFaceTrack(char side){
+
+	//determine what classifier to use
+	cv::CascadeClassifier cascadeName;
+	if( side == 'F' ) cascadeName = face_cascade;
+	else if( allowProfileTracking ) cascadeName = profile_cascade;
+
+	//make gray scale and equalize
 	cvtColor(captureFrame, grayscaleFrame, CV_BGR2GRAY);
 	equalizeHist(grayscaleFrame, grayscaleFrame);
+
 	//find faces and store them in the vector array, BIGGEST OBJECT makes sure we only have one!
-	face_cascade.detectMultiScale(grayscaleFrame, faces, 1.1, 2, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(30,30));
+	detectionScaleIncreaseRate = 1.1; // TODO this value determines how much greater the next possible face might be when testing for faces. 1 < values < 1.1 increase depth precision at the cost of performance
+	//if(fixedDepth) detectionScaleIncreaseRate = detectionScaleIncreaseRate*1.3; // setting scaleIncreaseRate to 1.5 makes it much faster, but looses faceHeight accuracy. use this if only the x,y data is needed
+	cascadeName.detectMultiScale(grayscaleFrame, faces, detectionScaleIncreaseRate, 2, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(30,30));
+
+	// undo the tranformation if necesary
+	if( allowProfileTracking && side == 'L' ) leftProfileInverseTransformation();
 
 }
 
-
 void FaceSpaceTracker::faceTrack(){
+	// this function is called once smoothing was ruled out and the face has to be detected
 
-	//capture a new image frame, this is the image in the showwebcam, the grayscale is used for face detection
-	captureDevice>>captureFrame;
+	// read with the camera
+	updateCameraFrame();
 
-	if(faceFound){ // if true, work on a cropped version for performance boost
+	// save a variable to not forget the previous face direction. overwrite the global one at the end of this method.
+	localTrackStatus = trackStatus; 
 
-		croppedFaceTrack();
+	// check if cropped search makes sense
+	if( localTrackStatus != 'N' ){
 
-	} // endif faceFound
+		// always check for frontal face first since the side of the face is only there to avoide disconnections. The user should not look from the side for long.
+		croppedFaceTrack('F');
+		// mark the result
+		if(faces.size() > 0) localTrackStatus='F';
+		else localTrackStatus='N'; // try to not overwrite this yet to see to quickly skip ahed. // else trackStatus='N';
 
-	if(!faceFound){ // find the face again using the entire image
+		// check for profile tracking
+		if( allowProfileTracking && localTrackStatus != 'F'){ // only do this if no frontal face was found right before
 
-		fullFaceTrack();
-	}
+			if( trackStatus == 'R' ) {			// if the last tracking was a RIGHT sided tracking, start right sided tracking
+				profileTrackCycle('R');
+			}	else if ( trackStatus == 'L' ) {		// ELSE IF the last tracking was a LEFT sided tracking, start left sided tracking
+				profileTrackCycle('L');
+			} else {		// if none of the above was true, check right and left just as before
+				profileTrackCycle('R');
+			}
 
-	//		clock_t end = clock();
-	//	cout << ceil(double(end - begin)*1000/ CLOCKS_PER_SEC) << " msec = time per facedetection"<<endl;
+		} // end allow Profile tracking
+
+	} // end cropped searches
+
+	if( localTrackStatus=='N' ){ // if nothing was found, search the entire image
+
+		// check everywhere for the frontal face
+		fullFaceTrack('F');
+		// mark the result
+		if(faces.size() > 0) localTrackStatus='F';
+
+	} // end full searchers
+
+	// update the global track status
+	trackStatus = localTrackStatus;
 
 	if(showCamFrame){
-		//draw a rectangle for all found faces in the vector array on the original image
-		if(faces.size()==1)	{
-			Point pt1(faces[0].x + faces[0].width, faces[0].y + faces[0].height);
-			Point pt2(faces[0].x, faces[0].y);
-			int rec2size = 8;
-			Point pt1eye(faces[0].x + faces[0].width*eyeXrelation -rec2size/2, faces[0].y + faces[0].height*eyeYrelation - rec2size/2);
-			Point pt2eye(faces[0].x + faces[0].width*eyeXrelation +rec2size/2, faces[0].y + faces[0].height*eyeYrelation + rec2size/2);
-			int imageMargin = lastTrackPixelData[2]*imageMarginRelation;
-			Point pt1track(faces[0].x + faces[0].width + imageMargin, faces[0].y + faces[0].height + imageMargin);
-			Point pt2track(faces[0].x - imageMargin, faces[0].y - imageMargin);
-
-			rectangle(captureFrame, pt1, pt2, cvScalar(0, 255, 0, 0), 1, 8, 0);
-			rectangle(captureFrame, pt1eye, pt2eye, cvScalar(0,0,0, 0), 3, 8, 0);
-			rectangle(captureFrame, pt1track, pt2track, cvScalar(0,0,255, 0), 3, 8, 0);
-		}
-		//show the output
-		imshow("outputCapture", captureFrame);
-		//pause for 33ms, i replaced it with 1 ms, without it it wont show the image
-		waitKey(1);
+		// show what the camera is seeing
+		displayCameraInput();
 	}
 }
 
 void FaceSpaceTracker::trackUpdate(){
-
-
+	// this is the mother function that handles the tracking and smoothing
 
 	if(!smoothonly){ // if true, track using opencv
 
@@ -712,23 +997,56 @@ void FaceSpaceTracker::trackUpdate(){
 		faces[0].height=lastTrackPixelData[2];
 	}// end smoothonly
 
-
+	// if nothing was found, feed the smoothers with old, known positions, e.g. the origin.
+	if(faces.size() < 1) { 
+		// create a cv::rect and push it onto the faces. the center of the frame together with the last face height
+		// sadly, since we calibrate at the very end, we must reverse calculate the x, y, pixel values of the origin
+		cv::Rect substitude( calibrationPixelX, calibrationPixelY, lastTrackPixelData[2], lastTrackPixelData[2]); //captureFrame.rows/2, captureFrame.cols/2
+		faces.push_back(substitude);
+	}
 
 	//if tracking found, read and interpret it
-	if(faces.size()==1) {
-		faceFound=true;
+	if(faces.size() > 0) {
+
 		// update last actual position
 		lastTrackPixelData[0] = faces[0].x;
 		lastTrackPixelData[1] = faces[0].y;
 		lastTrackPixelData[2] = faces[0].height;
 
+		// smoothen and transform to position data
 		trackFilter(faces[0].x, faces[0].y, faces[0].height);
 
-	}else{
-		// if no face detected, remember to try the entire image again!
-		faceFound = false;
 	}
 
+}
+
+void FaceSpaceTracker::displayCameraInput(){
+
+	if(faces.size() > 0)	{
+		// create several rectangles to marke different objects. 1: opencv Face, 2: cropped image, 3: eye position
+		Point pt1(lastTrackPixelData[0] + faces[0].width, lastTrackPixelData[1] + faces[0].height);
+		Point pt2(lastTrackPixelData[0], lastTrackPixelData[1]);
+		int rec2size = 8;
+		Point pt1eye(lastTrackPixelData[0] + lastTrackPixelData[2]*eyeXrelation -rec2size/2, lastTrackPixelData[1] + lastTrackPixelData[2]*eyeYrelation - rec2size/2);
+		Point pt2eye(lastTrackPixelData[0] + lastTrackPixelData[2]*eyeXrelation +rec2size/2, lastTrackPixelData[1] + lastTrackPixelData[2]*eyeYrelation + rec2size/2);
+		int imageMargin = lastTrackPixelData[2]*imageMarginRelation;
+		Point pt1track(lastTrackPixelData[0] + lastTrackPixelData[2] + imageMargin, lastTrackPixelData[1] + lastTrackPixelData[2] + imageMargin);
+		Point pt2track(lastTrackPixelData[0] - imageMargin, lastTrackPixelData[1] - imageMargin);
+
+		rectangle(captureFrame, pt1, pt2, cvScalar(0, 255, 0, 0), 1, 8, 0);
+		rectangle(captureFrame, pt1eye, pt2eye, cvScalar(0,0,0, 0), 3, 8, 0);
+		rectangle(captureFrame, pt1track, pt2track, cvScalar(0,0,255, 0), 3, 8, 0);
+	} else {
+		// if nothign was found, draw a rectangle arround the entire image
+		Point pt1(0, 0);
+		Point pt2(captureFrame.cols, captureFrame.rows);
+		rectangle(captureFrame, pt1, pt2, cvScalar(0,0,255, 0), 6, 8, 0);
+	}
+
+	//show the output
+	imshow("outputCapture", captureFrame);
+	//pause for 33ms, i replaced it with 1 ms, without it it wont show the image
+	waitKey(1);
 }
 
 
