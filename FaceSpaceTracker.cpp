@@ -3,6 +3,7 @@
 *
 *  Created on: Jul 31, 2014
 *      Author: Marcel Padilla
+		Last upload: 14.11 (reads year, month)
 */
 
 
@@ -45,19 +46,16 @@ using namespace cv; // opencv
 * This is a facetracking class by the use of a webcam that is set directly above the screen.
 * Used to return the estimated Position of the eyes in 3D space
 *
-* The origin of its coordinate system is the center of the screen, unless you calibrate, then it is perpendicuar on the screen to where you calibrated it
+* The origin of the default coordinate system is at the camera lens itself. When you call for a full calibration the origin becomes the position of the face at the moment of calibration
 * +X = Right
 * +Y = Up
 * -Z = Depth
 * Everything is measured in millimeters
+* Note that when launching the tracker, it will take a few runs to fill the smoothenings stack with data.
 *
 * The constructor reads the settings from the FaceSpaceTracker.cfg file
 * To update the Tracking Position, do Objectname.updateTrackData();"
 * and then get Objectname.getXhumanPosition() etc.
-*
-* eyeXrelation & eyeYrelation have default values .5,.4 to give the camera the center between your eyes,
-* but it might be benificial for the 3d effect to push the x value towards the dominant eye of the user,
-* eg. right dominant eye x=.7;
 *
 *
 * */
