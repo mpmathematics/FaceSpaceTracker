@@ -121,14 +121,7 @@ void FaceSpaceTracker::cameraInit(){
 	}
 
 	cout << " FaceSpaceTracker : open capture device" << endl;
-	int cameraNumber=0;
-	if(!captureDevice.open(cameraNumber)) { // open a camera and simultaniously see if it exits
-		cameraNumber++; // if not, check the next port
-		if(cameraNumber > 100) { // if still not, give error
-			cout << " OpenCV could not find a camera, exiting now "<< endl;
-			exit(-1);
-		}
-	}
+	loadCaptureDevice();
 
 	// make sure the frames are not empty
 	captureDevice >> captureFrame;
@@ -212,6 +205,10 @@ double FaceSpaceTracker::getAbsoluteYposition(){
 
 double FaceSpaceTracker::getAbsoluteZposition(){
 	return previousVectorData[2][0];
+}
+
+int FaceSpaceTracker::getCameraDeviceNumber(){
+	return cameraDeviceNumber;
 }
 
 char FaceSpaceTracker::getTrackStatus(){
@@ -350,6 +347,14 @@ bool FaceSpaceTracker::lastFrameWasTracked(){
 // =========== SET METHODS ==================================
 //=================================================================
 
+void FaceSpaceTracker::setCameraDeviceNumber(int id){
+	cameraDeviceNumber = id;
+}
+
+void FaceSpaceTracker::setCamVerticalFOV(double fov){
+	cameraVerticalFOV = fov;
+}
+
 void FaceSpaceTracker::setScreenHeigth(double heigth){
 	realLifeScreenHeight = heigth;
 }
@@ -360,10 +365,6 @@ void FaceSpaceTracker::setScreenWidth(double width){
 
 void FaceSpaceTracker::setFaceHeigth(double faceheigth){
 	realLifeFaceHeight = faceheigth;
-}
-
-void FaceSpaceTracker::setCamVerticalFOV(double fov){
-	cameraVerticalFOV = fov;
 }
 
 void FaceSpaceTracker::setDetectionScaleIncreaseRate(double rate){
@@ -458,22 +459,6 @@ void FaceSpaceTracker::setProfileTrackingFileName(std::string path){
 	profileTrackingFileName = path;
 }
 
-/* LINE BY LINE STRUCTURE OF CFG:
-realLifeScreenHeight in mm
-realLifeScreenWidth 
-realLifeFaceHeight
-webcamVerFOV degrees
-previousDataCols int
-previousPixelDataCols
-errorToleranceXY double
-errorToleranceDepth double
-eyeXrelation double
-eyeYrelation double
-skipAmount int
-faceTrackingFile the char* or string. Needed to load the .xml
-
-*/
-
 void FaceSpaceTracker::readConfigFile(){
 	// all the following parameters/Global variables are stored in a separate config file to be manipulated by the application
 	// this loads the parameters set in the current configfile to the current tracker
@@ -483,10 +468,11 @@ void FaceSpaceTracker::readConfigFile(){
 	inputFile.open(configFile); 
 
 	string line;
+	inputFile >> line >>  line >>  cameraDeviceNumber;
+	inputFile >> line >>  line >>  cameraVerticalFOV;
 	inputFile >> line >>  line >>  realLifeScreenHeight;
 	inputFile >> line >>  line >>  realLifeScreenWidth;
 	inputFile >> line >>  line >>  realLifeFaceHeight;
-	inputFile >> line >>  line >>  cameraVerticalFOV;
 	inputFile >> line >>  line >>  detectionScaleIncreaseRate;
 	inputFile >> line >>  line >>  allowFrameResizing;
 	inputFile >> line >>  line >>  cameraTargetXresolution;
@@ -524,6 +510,12 @@ void FaceSpaceTracker::saveConfigFile(){
 
 	// write everything
 
+	outputfile << "cameraDeviceNumber int= ";
+	outputfile << cameraDeviceNumber << endl;
+
+	outputfile << "cameraVerticalFOV Degrees= ";
+	outputfile << cameraVerticalFOV << endl;
+
 	outputfile << "realLifeScreenHeight Millimeters= ";
 	outputfile << realLifeScreenHeight << endl;
 
@@ -532,9 +524,6 @@ void FaceSpaceTracker::saveConfigFile(){
 
 	outputfile << "realLifeFaceHeight Millimeters= ";
 	outputfile << realLifeFaceHeight<< endl;
-
-	outputfile << "cameraVerticalFOV Degrees= ";
-	outputfile << cameraVerticalFOV << endl;
 
 	outputfile << "detectionScaleIncreaseRate double= ";
 	outputfile << detectionScaleIncreaseRate << endl;
@@ -595,6 +584,7 @@ void FaceSpaceTracker::reportStatus(){
 	cout << "absolute y position is = " << getAbsoluteYposition() << endl;
 	cout << "absolute z position is = " << getAbsoluteZposition() << endl;
 	cout << "current config file is = " << configFile << endl;
+	cout << "cameraDeviceNumber is = " << cameraDeviceNumber << endl;
 	cout << "current face tracking xml is = " << faceTrackingFileName << endl;
 	cout << "Camera X resolution = "  << cameraRealXresolution << endl;
 	cout << "Camera Y resolution = "  << cameraRealYresolution << endl;
@@ -638,6 +628,28 @@ void FaceSpaceTracker::reportStatus(){
 //=================================================================================================
 //=================================================================================================
 
+void FaceSpaceTracker::loadCaptureDevice(){
+	// this will be called during camerainit
+	
+	int currentCameraID=cameraDeviceNumber;
+	bool firstCheck=true;
+		
+	while(!captureDevice.open(currentCameraID)) { // open a camera and simultaniously see if it exits
+		// if it does not exist, try finding an alternative camera
+		if( firstCheck && cameraDeviceNumber !=0 ) { // if the .cfg file captureDeviceNumber was anything else than the default value and unsuccessful, start at the beginning to finds any camera.
+			currentCameraID=0; // restart searching for devices from the beginning.
+			firstCheck=false;
+		}else{ currentCameraID++;  } // if not, check the next port 
+		cout << currentCameraID << endl;
+		 // if still not, give error. Do not expect more than 100 cameras.
+		if(currentCameraID > 100) {
+			cout << " OpenCV could not find a camera. exiting now "<< endl;
+			exit(-1);
+		}
+	}
+
+
+}
 
 void FaceSpaceTracker::setUpSmoothing(){
 	// needed because of the dynamic sizes of the smoothening storage

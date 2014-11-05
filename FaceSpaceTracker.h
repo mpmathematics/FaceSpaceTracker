@@ -32,36 +32,47 @@ private: // all variables private, they are all specified in the cfg file or use
 	It is also important to note that the tracker object will always be loaded without calibration and assumes the camera to be the origin. By calibrating, the origin shifts to the position of the user. Since there is no standard distance to the desktop screen it is recommended to calibrate at least once before using the tracker to never calibrate. For example your application could start with a message saying "get into your desired position and press any button to continue."
 
 	The Lines inside the .cfg file are all written in the following format:
-	NameOfVariable       TypeOfInput=       Value
-	NOTE: do not change the order of the lines. It is important for idendification. Also keep the blank spaces inbetween the words. Only change the values on the most right.
+	NameOfVariable TypeOfInput= Value
+	NOTE: do not change the order of the lines. It is important for identification. Also keep the blank spaces in between the words. Only change the values on the most right.
+
+	FIRST TIME SET UP:
+	Since the screen size variables are unused by the tracker but necessary for visualization applications you do not need to set them as long as you only need raw tracking data.
+	However, the cameraVerticalFOV is important even though most cameras have FOV of about 40°-45°. Using the default wont give bad results most of the time but it will be better to figure out your camera's models FOV.
+	All the other variables from the .cfg file should only affect the performance. If your tracking is slow or lagging , you can read the meaning of each variable and adjust its numbers. Keep in mind that the light conditions of the users face is important. Generally more light gives faster results.
+
+	Multiple Camera issue:
+	Until now facespace Tracker will always grab the same default camera. Change the integer value of cameraDeviceNumber to pick a different camera. 
 
 	*/
 
 	//=================================================================
+	// editable .cfg variables
+
 	// The following variables appear in the same order inside the .cfg file
 
 	
+	int cameraDeviceNumber;
+	/*Opencv opens capture devices with integers beginning from 0. By using the value 0 opencv will grab the default camera such as the only camera connected. If you have multiple cameras attached and want to work with a specific one at start up, try increasing the integer until you are successful. e.g. 0, 1, 2, 3 (if you have 4 cameras) */
+
+	double cameraVerticalFOV;
+	/*This is the vertical angle of the viewing volume of your camera. The camera should hopefully have a constant angle that is specified in the tech specs of the camera model.*/
+
 	double realLifeScreenHeight;
 	double realLifeScreenWidth;
-	/* The phisical sizes of the monitor being used given by default unit in millimeters. Note that these two quanteties are not used inside the tracker, but are essential for */
+	/* The physical sizes of the monitor being used given by default unit in millimeters. Note that these two quantities are not used inside the tracker, but are essential for */
 
 	double realLifeFaceHeight;
 	/*This estimated the height of the face and is vital for determining the position. However, a rough estimate is enough. To see what exact size suits you, call setShowCamFrame(true) and watch the green rectangle. You can then hold a ruler at your face an measure the height of the green rectangle. Small mistakes have little effects.*/
 
-	
-	// web cam tech spec
-	double cameraVerticalFOV;
-	/*This is the vertical angle of the viewing volume of your camera. The camera should hopefully have a constant angle that is specified in the tech specs of the camera model.*/
-	
 	double detectionScaleIncreaseRate;
 	/*This has to be a value greater than 1. It determines how much to increase the search area after every attempt within the face detection algorithm in opencv. The closer the value gets to 1 the more precise will the face height while reducing the performance.*/
 	
 	bool allowFrameResizing;
-	/*Decides wether the face detection should run on the original dimensions of the picture taken by the camera or on the later defined target resolutions. Use this to downscale the camera images to increase performance while loosing precision. Low resolutions are aslo prone to not be able to detect a face to far away from the camera*/
+	/*Decides whether the face detection should run on the original dimensions of the picture taken by the camera or on the later defined target resolutions. Use this to downscale the camera images to increase performance while loosing precision. Low resolutions are also prone to not be able to detect a face to far away from the camera*/
 	
 	int cameraTargetXresolution;
 	int cameraTargetYresolution;
-	/*These are the target resoltions for the downscaling of the camera images if allowFrameResizing==1*/
+	/*These are the target resolutions for the down scaling of the camera images if allowFrameResizing==1*/
 
 	double imageMarginRelation; 
 	/*Given the height of the face found in the previous tracking, this number determines how much additional area to search for the face in the next tracking. e.g. if the value was 0.25 and the face was 100 pixels big in the last detection, then in the next tracking the face detection will run on a cropped area up to 25 pixels further than the previous face location in all directions. Reducing this increases performance at the cost of loosing fast tracking.*/
@@ -167,7 +178,7 @@ public:
 	/*To use this documentation, we assume that you have covered the getting started guide.  Use Ctrl+F to search this site. If the tracker object is named "myTracker" then the constructor is one of the following:*/
 
 	//=================================================================
-	// the consstructors
+	// the constructors
 	FaceSpaceTracker();
 	/*Creates a tracker object with the default camera using the settings specified in the FaceSpaceTrackerDefault.cfg that lies in the working directory.*/
 	FaceSpaceTracker(std::string);
@@ -283,14 +294,17 @@ public:
 
 
 	//=================================================================
+	// .cfg file variable methods
+
 	// the following functions are just the get and set methods of the variables inside the configuration files.
-	// To view the effects of these methods please refere to the configuration explaination
+	// To view the effects of these methods please refer to the configuration explanation
 
 	// get methods for .cfg file variables
+	int getCameraDeviceNumber();
+	double getCameraVerticalFOV();
 	double getScreenHeight();
 	double getScreenWidth();
 	double getFaceHeight();
-	double getCameraVerticalFOV();
 	double getDetectionScaleIncreaseRate();
 	bool getAllowFrameResizing();
 	int getCameraTargetXresolution();
@@ -308,10 +322,11 @@ public:
 	std::string getProfileTrackingFileName();
 
 	// set methods for .cfg file variables
+	void setCameraDeviceNumber(int);
+	void setCamVerticalFOV(double);
 	void setScreenHeigth(double);
 	void setScreenWidth(double);
 	void setFaceHeigth(double);
-	void setCamVerticalFOV(double);
 	void setDetectionScaleIncreaseRate(double);
 	void setAllowFrameRezising(bool);
 	void setCameraTargetXresolution(int);
@@ -333,10 +348,15 @@ public:
 	//=================================================================
 	//=================================================================
 	//=================================================================
+	// other methods used by the tracker
+
 	// The following methods handle the tracking and the smoothing. They are private because they all act on private variables and depend on each other.
 	// Feel free to edit them, but for the basic usage there will be no need to look at these.
 
 private:
+
+	void loadCaptureDevice();
+	/*This method loads the camera with the cameraDeviceNumber and if the camera was busy or not found it will search for other device numbers. If none are available an error message will be send*/
 
 	void setUpSmoothing();
 	/*Called to resize the initially empty arrays for the smoothening into the demanded sizes.*/
