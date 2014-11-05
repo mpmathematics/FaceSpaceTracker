@@ -125,6 +125,7 @@ void FaceSpaceTracker::cameraInit(){
 
 	// make sure the frames are not empty
 	captureDevice >> captureFrame;
+	captureDevice >> captureFrame;  // for misterious reasons, i need to call this twice to correctly read the cameraReal_resolution
 	grayscaleFrame = captureFrame;
 
 	// read resolutions. the opencv matrix holding the video capture automatically carries the correct sizes.
@@ -592,6 +593,7 @@ void FaceSpaceTracker::reportStatus(){
 	cout << "Camera Target Y resolution = "  << cameraTargetYresolution << endl;
 	cout << "Camera vertical field of view is = "  << cameraVerticalFOV << endl;
 	cout << "Face tracking file name is = " << faceTrackingFileName << endl;
+	cout << "AllowProfileTracking is = " << allowProfileTracking << endl;
 	cout << "Profile tracking file name is = " << profileTrackingFileName << endl;
 	cout << "Screen height is = " << realLifeScreenHeight << endl;
 	cout << "Screen width is = " << realLifeScreenWidth << endl;
@@ -688,9 +690,10 @@ void FaceSpaceTracker::leftProfileTransformation(){
 	cv::Mat flipper;
 	cv::flip(captureFrame, flipper, 1);
 	captureFrame = flipper;
-
-	// also transform the ancors for the head tracking, so the last track pixel data. [2] is face height
-	lastTrackPixelData[0] = captureFrame.rows - lastTrackPixelData[0] - lastTrackPixelData[2];
+	
+	// also transform the ancors for the head tracking, so the last track pixel data. [2] is face height/width. cols=xresolution
+	lastTrackPixelData[0] = captureFrame.cols - lastTrackPixelData[0] - lastTrackPixelData[2];
+	
 }
 
 void FaceSpaceTracker::leftProfileInverseTransformation(){
@@ -701,11 +704,11 @@ void FaceSpaceTracker::leftProfileInverseTransformation(){
 	// fix coordinates only if anything was found 
 	if(faces.size() > 0) {
 		// dont forget to shift by the face height since the offset is wrongly mirrored from top left to top right corner.
-		faces[0].x = captureFrame.rows - faces[0].x - faces[0].height;
+		faces[0].x = captureFrame.cols - faces[0].x - faces[0].height;
 	}
 
 	// also transform the ancors for the head tracking, so the last track pixel data, [2] is face height
-	lastTrackPixelData[0] = captureFrame.rows - lastTrackPixelData[0] - lastTrackPixelData[2];
+	lastTrackPixelData[0] = captureFrame.cols - lastTrackPixelData[0] - lastTrackPixelData[2];
 
 
 }
@@ -832,7 +835,7 @@ void FaceSpaceTracker::croppedFaceTrack( char side){
 	//determine what classifier to use
 	cv::CascadeClassifier cascadeName;
 	if( side == 'F' ) cascadeName = face_cascade;
-	else if( allowProfileTracking ) cascadeName = profile_cascade;
+	else if( allowProfileTracking ) cascadeName = profile_cascade; // if allowProfileTracking was false, then side would forcefully have to be =N at this point and we would not enter this method
 
 	// make the transform if necessary
 	if( allowProfileTracking && side == 'L' ) leftProfileTransformation();
@@ -854,15 +857,14 @@ void FaceSpaceTracker::croppedFaceTrack( char side){
 	cvtColor(captureFrame( Rect(ancorX , ancorY , ancorWidth , ancorHeight ) ), grayscaleFrame, CV_BGR2GRAY);
 	equalizeHist(grayscaleFrame, grayscaleFrame);
 
-	// estimate the size of the face
+	// estimate the size of the face based on the previous height
 	double min_face_size = lastTrackPixelData[2]*0.8;
 	double max_face_size = lastTrackPixelData[2]*1.2;
 
-	detectionScaleIncreaseRate = 1.1; // TODO this value determines how much greater the next possible face might be when testing for faces. 1 < values < 1.1 increase depth precision at the cost of performance
-	//if(fixedDepth) detectionScaleIncreaseRate = detectionScaleIncreaseRate*1.3; // setting scaleIncreaseRate to 1.5 makes it much faster, but looses faceHeight accuracy. use this if only the x,y data is needed
+	// apply the actual face detection
 	cascadeName.detectMultiScale(grayscaleFrame, faces, detectionScaleIncreaseRate , 0, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(min_face_size, min_face_size),Size(max_face_size, max_face_size));
 
-	if(faces.size()==1) { // now recalibrate the data back to the big image frame
+	if(faces.size() > 0) { // now recalibrate the data back to the big image frame
 		faces[0].x += ancorX;
 		faces[0].y += ancorY;
 	}
@@ -929,13 +931,14 @@ void FaceSpaceTracker::fullFaceTrack(char side){
 	if( side == 'F' ) cascadeName = face_cascade;
 	else if( allowProfileTracking ) cascadeName = profile_cascade;
 
+	// make the transform if necessary
+	if( allowProfileTracking && side == 'L' ) leftProfileTransformation();
+
 	//make gray scale and equalize
 	cvtColor(captureFrame, grayscaleFrame, CV_BGR2GRAY);
 	equalizeHist(grayscaleFrame, grayscaleFrame);
 
-	//find faces and store them in the vector array, BIGGEST OBJECT makes sure we only have one!
-	detectionScaleIncreaseRate = 1.1; // TODO this value determines how much greater the next possible face might be when testing for faces. 1 < values < 1.1 increase depth precision at the cost of performance
-	//if(fixedDepth) detectionScaleIncreaseRate = detectionScaleIncreaseRate*1.3; // setting scaleIncreaseRate to 1.5 makes it much faster, but looses faceHeight accuracy. use this if only the x,y data is needed
+	// apply the actual face detection
 	cascadeName.detectMultiScale(grayscaleFrame, faces, detectionScaleIncreaseRate, 2, CV_HAAR_FIND_BIGGEST_OBJECT| CV_HAAR_SCALE_IMAGE, Size(30,30));
 
 	// undo the tranformation if necesary
@@ -1055,7 +1058,7 @@ void FaceSpaceTracker::displayCameraInput(){
 
 	//show the output
 	imshow("outputCapture", captureFrame);
-	//pause for 33ms, i replaced it with 1 ms, without it it wont show the image
+	//pause for 1 ms, without it it wont show the image
 	waitKey(1);
 }
 
